@@ -35,7 +35,8 @@ class BacktestEngine:
                 symbol_or_symbols=symbol,
                 timeframe=TimeFrame.Day,
                 start=start,
-                end=end
+                end=end,
+                feed='iex'
             )
             bars = self.data_client.get_stock_bars(request)
             df = bars.df

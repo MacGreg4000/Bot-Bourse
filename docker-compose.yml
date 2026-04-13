@@ -18,6 +18,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+      - /home/app/.streamlit
     command: ["streamlit", "run", "src/app.py",
               "--server.port=8501",
               "--server.address=0.0.0.0",
