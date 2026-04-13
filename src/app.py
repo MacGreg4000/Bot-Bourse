@@ -207,12 +207,14 @@ def render_backtest_tab():
     """Onglet de backtesting historique."""
     st.header("📊 Backtest — Performance Historique")
 
-    BACKTEST_SYMBOLS = ['AAPL', 'SPY', 'QQQ', 'TSLA', 'NVDA', 'MSFT', 'AMD', 'COIN', 'PLTR', 'MARA']
+    BACKTEST_ETFS = ['SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'EFA', 'EEM', 'XLF', 'XLE', 'XLK']
+    BACKTEST_STOCKS = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMD', 'COIN', 'PLTR', 'MARA']
+    BACKTEST_SYMBOLS = BACKTEST_ETFS + BACKTEST_STOCKS
 
     # Paramètres généraux
     col1, col2, col3 = st.columns(3)
     with col1:
-        symbols = st.multiselect("Symboles", BACKTEST_SYMBOLS, default=['TSLA', 'NVDA', 'SPY', 'AMD'])
+        symbols = st.multiselect("Symboles", BACKTEST_SYMBOLS, default=BACKTEST_ETFS)
     with col2:
         days = st.selectbox("Période", [90, 180, 365, 730], index=2,
                             format_func=lambda d: f"{d} jours ({d // 30} mois)")
