@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+
+  # Interface web Streamlit — http://localhost:8501
+  trading-ui:
+    build: .
+    container_name: alpaca_ui
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+    ports:
+      - "127.0.0.1:8501:8501"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    command: ["streamlit", "run", "src/app.py",
+              "--server.port=8501",
+              "--server.address=0.0.0.0",
+              "--server.enableXsrfProtection=true",
+              "--server.headless=true"]
+
+  # Bot automatique — analyse et passe les ordres en boucle
+  trading-bot:
+    build: .
+    container_name: alpaca_bot
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    command: ["python", "src/main.py"]
