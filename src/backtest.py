@@ -24,9 +24,9 @@ STRATEGY_PRESETS = {
         'description': 'Achète chaque creux RSI dans une tendance haussière — plusieurs entrées, vend sur rebond',
         'mode': 'dips',
         'ema_trend': 50,
-        'rsi_buy': 35,
+        'rsi_buy': 45,
         'rsi_sell': 70,
-        'buy_size_pct': 20.0,
+        'buy_size_pct': 25.0,
         'max_invested_pct': 80.0,
     },
     'Trend Following': {
