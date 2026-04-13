@@ -5,7 +5,7 @@ from plotly.subplots import make_subplots
 from config import Config
 from engine import TradingEngine
 from strategy import TradingStrategy
-from backtest import BacktestEngine, StrategyParams, STRATEGY_PRESETS
+from backtest import BacktestEngine, STRATEGY_PRESETS
 from alpaca.trading.client import TradingClient
 from alpaca.data import StockHistoricalDataClient
 import logging
@@ -45,55 +45,69 @@ def update_data(symbol: str):
         logger.error(f"Failed to update data for {symbol}", exc_info=True)
 
 
-def _build_strategy_params(prefix: str, preset_name: str) -> StrategyParams:
-    """Construit les paramètres depuis les widgets Streamlit."""
-    p = StrategyParams.from_preset(preset_name)
+def _build_strategy_params(prefix: str, preset_name: str) -> dict:
+    """Construit les paramètres depuis les widgets Streamlit selon le mode."""
+    preset = STRATEGY_PRESETS[preset_name]
+    mode = preset.get('mode', 'crossover')
+    custom = {}
 
     with st.expander(f"Ajuster les paramètres ({prefix})", expanded=False):
-        st.markdown("**Signaux d'achat**")
-        col_a, col_b = st.columns(2)
-        with col_a:
-            p.ema_fast = st.slider("EMA rapide", 3, 20, p.ema_fast, key=f"{prefix}_ema_fast")
-            p.ema_slow = st.slider("EMA lente", 10, 50, p.ema_slow, key=f"{prefix}_ema_slow")
-            p.rsi_buy_min = st.slider("RSI achat min", 10, 80, p.rsi_buy_min, key=f"{prefix}_rsi_min")
-            p.rsi_buy_max = st.slider("RSI achat max", 50, 95, p.rsi_buy_max, key=f"{prefix}_rsi_max")
-        with col_b:
-            p.use_volume = st.checkbox("Filtre volume", p.use_volume, key=f"{prefix}_use_vol")
-            if p.use_volume:
-                p.volume_mult = st.slider("Volume x SMA", 1.0, 3.0, p.volume_mult, 0.1, key=f"{prefix}_vol")
-            p.use_rsi_oversold = st.checkbox("Achat RSI oversold", p.use_rsi_oversold, key=f"{prefix}_use_os")
-            if p.use_rsi_oversold:
-                p.rsi_oversold = st.slider("Seuil RSI oversold", 15, 40, p.rsi_oversold, key=f"{prefix}_os")
+        if mode == 'trend':
+            col_a, col_b = st.columns(2)
+            with col_a:
+                custom['ema_trend'] = st.slider("EMA tendance", 10, 100, preset['ema_trend'], key=f"{prefix}_ema")
+                custom['allocation_pct'] = st.slider("Allocation %", 20.0, 100.0, preset['allocation_pct'], 5.0, key=f"{prefix}_alloc",
+                                                     help="% du capital investi quand la tendance est haussière")
+            with col_b:
+                custom['trailing_stop'] = st.slider("Trailing stop %", 0.0, 20.0, preset['trailing_stop'], 1.0, key=f"{prefix}_ts",
+                                                    help="Vend si le prix chute de X% depuis son plus haut. 0 = désactivé")
 
-        st.markdown("**Signaux de vente**")
-        col_c, col_d = st.columns(2)
-        with col_c:
-            p.sell_on_ema_cross = st.checkbox("Vendre sur croisement EMA baissier", p.sell_on_ema_cross, key=f"{prefix}_sell_ema")
-            p.sell_on_rsi = st.checkbox("Vendre sur RSI élevé", p.sell_on_rsi, key=f"{prefix}_sell_rsi")
-            if p.sell_on_rsi:
-                p.rsi_sell = st.slider("RSI vente (seuil)", 60, 95, p.rsi_sell, key=f"{prefix}_rsi_sell")
-        with col_d:
-            p.use_trailing_stop = st.checkbox("Trailing stop (recommandé)", p.use_trailing_stop, key=f"{prefix}_use_ts")
-            if p.use_trailing_stop:
-                p.trailing_stop = st.slider("Trailing stop %", 3.0, 20.0, p.trailing_stop, 0.5, key=f"{prefix}_ts",
-                                            help="Vend si le prix chute de X% depuis son plus haut")
+        elif mode == 'dips':
+            col_a, col_b = st.columns(2)
+            with col_a:
+                custom['ema_trend'] = st.slider("EMA tendance", 20, 100, preset['ema_trend'], key=f"{prefix}_ema")
+                custom['rsi_buy'] = st.slider("RSI achat (creux)", 15, 45, preset['rsi_buy'], key=f"{prefix}_rsi_buy",
+                                              help="Achète quand le RSI descend sous ce seuil")
+                custom['rsi_sell'] = st.slider("RSI vente (rebond)", 55, 85, preset['rsi_sell'], key=f"{prefix}_rsi_sell",
+                                              help="Vend quand le RSI remonte au-dessus")
+            with col_b:
+                custom['buy_size_pct'] = st.slider("Taille achat %", 10.0, 40.0, preset['buy_size_pct'], 5.0, key=f"{prefix}_size",
+                                                   help="% du capital par achat de creux")
+                custom['max_invested_pct'] = st.slider("Max investi %", 40.0, 100.0, preset['max_invested_pct'], 10.0, key=f"{prefix}_max",
+                                                       help="Plafond d'investissement total")
 
-        st.markdown("**Gestion du risque**")
-        col_e, col_f = st.columns(2)
-        with col_e:
-            p.stop_loss = st.slider("Stop-loss fixe %", 0.0, 15.0, p.stop_loss, 0.5, key=f"{prefix}_sl",
-                                    help="0 = désactivé")
-            p.take_profit = st.slider("Take-profit fixe %", 0.0, 50.0, p.take_profit, 1.0, key=f"{prefix}_tp",
-                                      help="0 = désactivé (recommandé avec trailing stop)")
-        with col_f:
-            p.max_position_pct = st.slider("Taille position %", 5.0, 100.0, p.max_position_pct, 5.0, key=f"{prefix}_pos",
-                                           help="% du capital par trade")
-    return p
+        else:  # crossover
+            st.markdown("**Signaux d'achat**")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                custom['ema_fast'] = st.slider("EMA rapide", 3, 20, preset['ema_fast'], key=f"{prefix}_ema_fast")
+                custom['ema_slow'] = st.slider("EMA lente", 10, 50, preset['ema_slow'], key=f"{prefix}_ema_slow")
+                custom['rsi_buy_min'] = st.slider("RSI achat min", 10, 80, preset['rsi_buy_min'], key=f"{prefix}_rsi_min")
+                custom['rsi_buy_max'] = st.slider("RSI achat max", 50, 95, preset['rsi_buy_max'], key=f"{prefix}_rsi_max")
+            with col_b:
+                custom['use_rsi_oversold'] = st.checkbox("Achat RSI oversold", preset.get('use_rsi_oversold', False), key=f"{prefix}_use_os")
+                if custom['use_rsi_oversold']:
+                    custom['rsi_oversold'] = st.slider("Seuil RSI oversold", 15, 40, preset.get('rsi_oversold', 30), key=f"{prefix}_os")
+
+            st.markdown("**Signaux de vente & risque**")
+            col_c, col_d = st.columns(2)
+            with col_c:
+                custom['sell_on_ema_cross'] = st.checkbox("Vendre sur croisement EMA", preset.get('sell_on_ema_cross', True), key=f"{prefix}_sell_ema")
+                custom['use_trailing_stop'] = st.checkbox("Trailing stop", preset.get('use_trailing_stop', False), key=f"{prefix}_use_ts")
+                if custom['use_trailing_stop']:
+                    custom['trailing_stop'] = st.slider("Trailing stop %", 3.0, 20.0, preset.get('trailing_stop', 8.0), 0.5, key=f"{prefix}_ts")
+            with col_d:
+                custom['stop_loss'] = st.slider("Stop-loss %", 0.0, 15.0, preset.get('stop_loss', 5.0), 0.5, key=f"{prefix}_sl")
+                custom['take_profit'] = st.slider("Take-profit %", 0.0, 50.0, preset.get('take_profit', 0.0), 1.0, key=f"{prefix}_tp")
+                custom['max_position_pct'] = st.slider("Taille position %", 5.0, 100.0, preset.get('max_position_pct', 30.0), 5.0, key=f"{prefix}_pos")
+
+    return custom
 
 
-def _run_backtest(data_client, symbols, days, capital, params, label):
+def _run_backtest(data_client, symbols, days, capital, preset_name, custom_params, label):
     """Lance le backtest et retourne les résultats."""
-    engine = BacktestEngine(data_client, initial_capital=float(capital), params=params)
+    engine = BacktestEngine(data_client, initial_capital=float(capital),
+                            preset_name=preset_name, custom_params=custom_params)
     results = []
     progress = st.progress(0, text=f"{label}...")
     for i, sym in enumerate(symbols):
@@ -215,16 +229,16 @@ def render_backtest_tab():
             st.subheader("Stratégie A")
             preset_a = st.selectbox("Preset", preset_names, index=0, key="preset_a")
             st.caption(STRATEGY_PRESETS[preset_a]['description'])
-            params_a = _build_strategy_params("a", preset_a)
+            custom_a = _build_strategy_params("a", preset_a)
         with col_s2:
             st.subheader("Stratégie B")
             preset_b = st.selectbox("Preset", preset_names, index=1, key="preset_b")
             st.caption(STRATEGY_PRESETS[preset_b]['description'])
-            params_b = _build_strategy_params("b", preset_b)
+            custom_b = _build_strategy_params("b", preset_b)
     else:
-        preset = st.selectbox("Stratégie", preset_names, index=1)
-        st.caption(STRATEGY_PRESETS[preset]['description'])
-        params_a = _build_strategy_params("single", preset)
+        preset_a = st.selectbox("Stratégie", preset_names, index=0)
+        st.caption(STRATEGY_PRESETS[preset_a]['description'])
+        custom_a = _build_strategy_params("single", preset_a)
 
     if st.button("🚀 Lancer le Backtest", type="primary"):
         if not symbols:
@@ -234,8 +248,8 @@ def render_backtest_tab():
         data_client = StockHistoricalDataClient(Config.ALPACA_API_KEY, Config.ALPACA_SECRET_KEY)
 
         if compare_mode:
-            results_a = _run_backtest(data_client, symbols, days, capital, params_a, "Stratégie A")
-            results_b = _run_backtest(data_client, symbols, days, capital, params_b, "Stratégie B")
+            results_a = _run_backtest(data_client, symbols, days, capital, preset_a, custom_a, "Stratégie A")
+            results_b = _run_backtest(data_client, symbols, days, capital, preset_b, custom_b, "Stratégie B")
 
             # Tableau comparatif
             st.subheader("📋 Comparaison")
@@ -296,7 +310,7 @@ def render_backtest_tab():
                 _display_results(results_b, capital, "B", color='orange')
 
         else:
-            results = _run_backtest(data_client, symbols, days, capital, params_a, "Backtest")
+            results = _run_backtest(data_client, symbols, days, capital, preset_a, custom_a, "Backtest")
             st.subheader("📋 Résultats")
             _display_results(results, capital, "Backtest")
 

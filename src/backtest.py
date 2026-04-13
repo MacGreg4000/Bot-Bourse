@@ -5,7 +5,7 @@ from alpaca.data import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from config import Config
-from strategy import TradingStrategy
+import ta
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,129 +13,79 @@ logger = logging.getLogger(__name__)
 
 # Presets de stratégie
 STRATEGY_PRESETS = {
+    'Stay in Trend': {
+        'description': 'Reste investi à 80% tant que prix > EMA — capte toute la hausse, sort quand la tendance casse',
+        'mode': 'trend',
+        'ema_trend': 21,
+        'allocation_pct': 80.0,
+        'trailing_stop': 10.0,
+    },
+    'Buy the Dips': {
+        'description': 'Achète chaque creux RSI dans une tendance haussière — plusieurs entrées, vend sur rebond',
+        'mode': 'dips',
+        'ema_trend': 50,
+        'rsi_buy': 35,
+        'rsi_sell': 70,
+        'buy_size_pct': 20.0,
+        'max_invested_pct': 80.0,
+    },
     'Trend Following': {
-        'description': 'Suit la tendance avec trailing stop — laisse courir les gains, coupe les pertes vite',
+        'description': 'EMA crossover + trailing stop 8% — laisse courir les gains',
+        'mode': 'crossover',
         'ema_fast': 9, 'ema_slow': 21,
         'rsi_buy_min': 40, 'rsi_buy_max': 85,
         'rsi_sell': 95,
-        'volume_mult': 1.0,
-        'use_volume': False,
+        'use_volume': False, 'volume_mult': 1.0,
         'use_rsi_oversold': True, 'rsi_oversold': 35,
         'stop_loss': 5.0, 'take_profit': 0.0,
-        'trailing_stop': 8.0,
-        'use_trailing_stop': True,
-        'sell_on_ema_cross': True,
-        'sell_on_rsi': False,
+        'trailing_stop': 8.0, 'use_trailing_stop': True,
+        'sell_on_ema_cross': True, 'sell_on_rsi': False,
         'max_position_pct': 30.0,
     },
     'Agressive': {
-        'description': 'EMA rapide + RSI large + trailing stop — réactif sur valeurs volatiles',
+        'description': 'EMA rapide 5/13 + trailing stop 6% — réactif sur valeurs volatiles',
+        'mode': 'crossover',
         'ema_fast': 5, 'ema_slow': 13,
         'rsi_buy_min': 35, 'rsi_buy_max': 70,
         'rsi_sell': 72,
-        'volume_mult': 1.0,
-        'use_volume': False,
+        'use_volume': False, 'volume_mult': 1.0,
         'use_rsi_oversold': True, 'rsi_oversold': 25,
         'stop_loss': 4.0, 'take_profit': 0.0,
-        'trailing_stop': 6.0,
-        'use_trailing_stop': True,
-        'sell_on_ema_cross': True,
-        'sell_on_rsi': False,
+        'trailing_stop': 6.0, 'use_trailing_stop': True,
+        'sell_on_ema_cross': True, 'sell_on_rsi': False,
         'max_position_pct': 25.0,
-    },
-    'Momentum': {
-        'description': 'Achète la force (RSI élevé), trailing stop large pour laisser la tendance respirer',
-        'ema_fast': 9, 'ema_slow': 21,
-        'rsi_buy_min': 55, 'rsi_buy_max': 80,
-        'rsi_sell': 95,
-        'volume_mult': 1.0,
-        'use_volume': False,
-        'use_rsi_oversold': False, 'rsi_oversold': 30,
-        'stop_loss': 6.0, 'take_profit': 0.0,
-        'trailing_stop': 10.0,
-        'use_trailing_stop': True,
-        'sell_on_ema_cross': True,
-        'sell_on_rsi': False,
-        'max_position_pct': 25.0,
-    },
-    'Mean Reversion': {
-        'description': 'Achète les creux (RSI oversold), vend les rebonds rapidement',
-        'ema_fast': 9, 'ema_slow': 21,
-        'rsi_buy_min': 20, 'rsi_buy_max': 40,
-        'rsi_sell': 65,
-        'volume_mult': 1.0,
-        'use_volume': False,
-        'use_rsi_oversold': True, 'rsi_oversold': 30,
-        'stop_loss': 4.0, 'take_profit': 8.0,
-        'trailing_stop': 0.0,
-        'use_trailing_stop': False,
-        'sell_on_ema_cross': False,
-        'sell_on_rsi': True,
-        'max_position_pct': 20.0,
     },
     'Conservatrice (ancienne)': {
-        'description': 'Stratégie originale — EMA crossover strict + RSI 50-75 + volume 1.5x',
+        'description': 'Stratégie originale — EMA 9/21 + RSI 50-75 + volume — quasi aucun trade',
+        'mode': 'crossover',
         'ema_fast': 9, 'ema_slow': 21,
         'rsi_buy_min': 50, 'rsi_buy_max': 75,
         'rsi_sell': 78,
-        'volume_mult': 1.5,
-        'use_volume': True,
+        'use_volume': True, 'volume_mult': 1.5,
         'use_rsi_oversold': False, 'rsi_oversold': 30,
         'stop_loss': 5.0, 'take_profit': 10.0,
-        'trailing_stop': 0.0,
-        'use_trailing_stop': False,
-        'sell_on_ema_cross': True,
-        'sell_on_rsi': True,
+        'trailing_stop': 0.0, 'use_trailing_stop': False,
+        'sell_on_ema_cross': True, 'sell_on_rsi': True,
         'max_position_pct': 10.0,
     },
 }
 
 
-class StrategyParams:
-    """Paramètres de stratégie configurables."""
-    def __init__(self, ema_fast=9, ema_slow=21,
-                 rsi_buy_min=50, rsi_buy_max=75, rsi_sell=78,
-                 volume_mult=1.5, use_volume=True,
-                 use_rsi_oversold=False, rsi_oversold=30,
-                 stop_loss=5.0, take_profit=10.0,
-                 trailing_stop=0.0, use_trailing_stop=False,
-                 sell_on_ema_cross=True, sell_on_rsi=True,
-                 max_position_pct=10.0):
-        self.ema_fast = ema_fast
-        self.ema_slow = ema_slow
-        self.rsi_buy_min = rsi_buy_min
-        self.rsi_buy_max = rsi_buy_max
-        self.rsi_sell = rsi_sell
-        self.volume_mult = volume_mult
-        self.use_volume = use_volume
-        self.use_rsi_oversold = use_rsi_oversold
-        self.rsi_oversold = rsi_oversold
-        self.stop_loss = stop_loss
-        self.take_profit = take_profit
-        self.trailing_stop = trailing_stop
-        self.use_trailing_stop = use_trailing_stop
-        self.sell_on_ema_cross = sell_on_ema_cross
-        self.sell_on_rsi = sell_on_rsi
-        self.max_position_pct = max_position_pct
-
-    @classmethod
-    def from_preset(cls, preset_name):
-        p = STRATEGY_PRESETS[preset_name]
-        return cls(**{k: v for k, v in p.items() if k != 'description'})
-
-
 class BacktestEngine:
-    """Moteur de backtesting qui rejoue la stratégie sur des données historiques."""
+    """Moteur de backtesting multi-stratégie."""
 
     def __init__(self, data_client: StockHistoricalDataClient,
                  initial_capital: float = 100_000.0,
-                 params: StrategyParams = None):
+                 preset_name: str = 'Stay in Trend',
+                 custom_params: dict = None):
         self.data_client = data_client
         self.initial_capital = initial_capital
-        self.params = params or StrategyParams()
+        self.preset_name = preset_name
+        self.params = dict(STRATEGY_PRESETS[preset_name])
+        if custom_params:
+            self.params.update(custom_params)
 
     def fetch_historical_data(self, symbol: str, days: int = 365) -> pd.DataFrame:
-        """Récupère les données historiques journalières sur N jours."""
         try:
             end = datetime.now()
             start = end - timedelta(days=days)
@@ -160,136 +110,20 @@ class BacktestEngine:
             logger.error(f"Erreur fetch historique {symbol}: {e}")
             return pd.DataFrame()
 
-    def _calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Calcule les indicateurs avec les EMAs configurables."""
-        import ta
-        p = self.params
-        df['EMA_fast'] = ta.trend.EMAIndicator(df['Close'], window=p.ema_fast).ema_indicator()
-        df['EMA_slow'] = ta.trend.EMAIndicator(df['Close'], window=p.ema_slow).ema_indicator()
-        df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
-        df['Volume_SMA'] = ta.trend.SMAIndicator(df['Volume'], window=20).sma_indicator()
-        return df
-
     def run(self, symbol: str, days: int = 365) -> dict:
-        """Exécute le backtest pour un symbole sur N jours."""
         df = self.fetch_historical_data(symbol, days)
         if df.empty or len(df) < 50:
             return {'error': f'Pas assez de données pour {symbol}'}
 
-        df = self._calculate_indicators(df)
-        df = df.dropna()
+        mode = self.params.get('mode', 'crossover')
+        if mode == 'trend':
+            return self._run_stay_in_trend(symbol, df)
+        elif mode == 'dips':
+            return self._run_buy_dips(symbol, df)
+        else:
+            return self._run_crossover(symbol, df)
 
-        p = self.params
-        cash = self.initial_capital
-        shares = 0.0
-        entry_price = 0.0
-        highest_since_entry = 0.0  # Pour le trailing stop
-        trades = []
-        portfolio_values = []
-
-        for i in range(1, len(df)):
-            current = df.iloc[i]
-            prev = df.iloc[i - 1]
-            price = current['Close']
-            date = df.index[i]
-
-            portfolio_value = cash + shares * price
-            portfolio_values.append({'date': date, 'value': portfolio_value})
-
-            # Gestion de position ouverte
-            if shares > 0:
-                change_pct = ((price - entry_price) / entry_price) * 100
-
-                # Mettre à jour le plus haut depuis l'entrée
-                if price > highest_since_entry:
-                    highest_since_entry = price
-
-                # Trailing stop : vente si le prix chute de X% depuis le plus haut
-                if p.use_trailing_stop and p.trailing_stop > 0 and highest_since_entry > 0:
-                    drop_from_high = ((highest_since_entry - price) / highest_since_entry) * 100
-                    if drop_from_high >= p.trailing_stop:
-                        cash += shares * price
-                        trades.append({
-                            'date': date, 'symbol': symbol, 'action': 'SELL (TS)',
-                            'price': price, 'qty': shares, 'pnl_pct': change_pct
-                        })
-                        shares = 0.0
-                        entry_price = 0.0
-                        highest_since_entry = 0.0
-                        continue
-
-                # Stop-loss fixe
-                if p.stop_loss > 0 and change_pct <= -p.stop_loss:
-                    cash += shares * price
-                    trades.append({
-                        'date': date, 'symbol': symbol, 'action': 'SELL (SL)',
-                        'price': price, 'qty': shares, 'pnl_pct': change_pct
-                    })
-                    shares = 0.0
-                    entry_price = 0.0
-                    highest_since_entry = 0.0
-                    continue
-
-                # Take-profit fixe (0 = désactivé)
-                if p.take_profit > 0 and change_pct >= p.take_profit:
-                    cash += shares * price
-                    trades.append({
-                        'date': date, 'symbol': symbol, 'action': 'SELL (TP)',
-                        'price': price, 'qty': shares, 'pnl_pct': change_pct
-                    })
-                    shares = 0.0
-                    entry_price = 0.0
-                    highest_since_entry = 0.0
-                    continue
-
-            # Signaux d'achat
-            ema_cross_up = (prev['EMA_fast'] < prev['EMA_slow']) and (current['EMA_fast'] > current['EMA_slow'])
-            ema_cross_down = (prev['EMA_fast'] > prev['EMA_slow']) and (current['EMA_fast'] < current['EMA_slow'])
-
-            buy_signal = ema_cross_up and (p.rsi_buy_min < current['RSI'] < p.rsi_buy_max)
-
-            # Filtre volume optionnel
-            if p.use_volume and buy_signal:
-                buy_signal = current['Volume'] > p.volume_mult * current['Volume_SMA']
-
-            # Signal alternatif : RSI oversold
-            if p.use_rsi_oversold and not buy_signal and shares == 0:
-                if current['RSI'] < p.rsi_oversold and current['EMA_fast'] > current['EMA_slow'] * 0.98:
-                    buy_signal = True
-
-            # Signaux de vente (configurables)
-            sell_signal = False
-            if p.sell_on_ema_cross and ema_cross_down:
-                sell_signal = True
-            if p.sell_on_rsi and current['RSI'] > p.rsi_sell:
-                sell_signal = True
-
-            # Exécution
-            if buy_signal and shares == 0:
-                allocated = cash * (p.max_position_pct / 100.0)
-                qty = allocated / price
-                if qty > 0:
-                    shares = qty
-                    entry_price = price
-                    highest_since_entry = price
-                    cash -= shares * price
-                    trades.append({
-                        'date': date, 'symbol': symbol, 'action': 'BUY',
-                        'price': price, 'qty': shares, 'pnl_pct': 0.0
-                    })
-
-            elif sell_signal and shares > 0:
-                change_pct = ((price - entry_price) / entry_price) * 100
-                cash += shares * price
-                trades.append({
-                    'date': date, 'symbol': symbol, 'action': 'SELL',
-                    'price': price, 'qty': shares, 'pnl_pct': change_pct
-                })
-                shares = 0.0
-                entry_price = 0.0
-                highest_since_entry = 0.0
-
-        # Valeur finale
+    def _compute_metrics(self, symbol, df, portfolio_values, trades, cash, shares):
         final_price = df.iloc[-1]['Close']
         final_value = cash + shares * final_price
         portfolio_df = pd.DataFrame(portfolio_values)
@@ -298,14 +132,12 @@ class BacktestEngine:
         trades_df = pd.DataFrame(trades) if trades else pd.DataFrame()
         buy_hold_return = ((df.iloc[-1]['Close'] - df.iloc[0]['Close']) / df.iloc[0]['Close']) * 100
 
-        # Max drawdown
         max_drawdown = 0.0
         if not portfolio_df.empty:
             peak = portfolio_df['value'].expanding().max()
             drawdown = (portfolio_df['value'] - peak) / peak * 100
             max_drawdown = drawdown.min()
 
-        # Stats des trades
         sell_trades = trades_df[trades_df['action'].str.startswith('SELL')] if not trades_df.empty else pd.DataFrame()
         win_trades = sell_trades[sell_trades['pnl_pct'] > 0] if not sell_trades.empty else pd.DataFrame()
         loss_trades = sell_trades[sell_trades['pnl_pct'] <= 0] if not sell_trades.empty else pd.DataFrame()
@@ -317,7 +149,6 @@ class BacktestEngine:
 
         return {
             'symbol': symbol,
-            'period_days': days,
             'initial_capital': self.initial_capital,
             'final_value': final_value,
             'total_return_pct': total_return_pct,
@@ -332,3 +163,256 @@ class BacktestEngine:
             'df': df,
             'open_position': shares > 0,
         }
+
+    # ── Stay in Trend ──────────────────────────────────────────
+    def _run_stay_in_trend(self, symbol, df):
+        """Reste investi tant que prix > EMA, sort quand ça casse."""
+        p = self.params
+        ema_window = p.get('ema_trend', 21)
+        alloc = p.get('allocation_pct', 80.0)
+        ts_pct = p.get('trailing_stop', 10.0)
+
+        df['EMA_trend'] = ta.trend.EMAIndicator(df['Close'], window=ema_window).ema_indicator()
+        df = df.dropna()
+
+        cash = self.initial_capital
+        shares = 0.0
+        entry_price = 0.0
+        highest = 0.0
+        trades = []
+        portfolio_values = []
+
+        for i in range(1, len(df)):
+            price = df.iloc[i]['Close']
+            date = df.index[i]
+            ema = df.iloc[i]['EMA_trend']
+
+            portfolio_value = cash + shares * price
+            portfolio_values.append({'date': date, 'value': portfolio_value})
+
+            if shares > 0:
+                if price > highest:
+                    highest = price
+                change_pct = ((price - entry_price) / entry_price) * 100
+
+                # Trailing stop
+                if ts_pct > 0 and highest > 0:
+                    drop = ((highest - price) / highest) * 100
+                    if drop >= ts_pct:
+                        cash += shares * price
+                        trades.append({'date': date, 'symbol': symbol, 'action': 'SELL (TS)',
+                                       'price': price, 'qty': shares, 'pnl_pct': change_pct})
+                        shares = 0.0
+                        entry_price = 0.0
+                        highest = 0.0
+                        continue
+
+                # Sortie sur cassure EMA
+                if price < ema:
+                    cash += shares * price
+                    trades.append({'date': date, 'symbol': symbol, 'action': 'SELL',
+                                   'price': price, 'qty': shares, 'pnl_pct': change_pct})
+                    shares = 0.0
+                    entry_price = 0.0
+                    highest = 0.0
+
+            else:
+                # Entrée quand prix repasse au-dessus de l'EMA
+                if price > ema:
+                    invest = (cash + shares * price) * (alloc / 100.0)
+                    invest = min(invest, cash)
+                    if invest > 0:
+                        qty = invest / price
+                        shares = qty
+                        entry_price = price
+                        highest = price
+                        cash -= invest
+                        trades.append({'date': date, 'symbol': symbol, 'action': 'BUY',
+                                       'price': price, 'qty': qty, 'pnl_pct': 0.0})
+
+        return self._compute_metrics(symbol, df, portfolio_values, trades, cash, shares)
+
+    # ── Buy the Dips ───────────────────────────────────────────
+    def _run_buy_dips(self, symbol, df):
+        """Achète chaque creux RSI dans une tendance haussière."""
+        p = self.params
+        ema_window = p.get('ema_trend', 50)
+        rsi_buy = p.get('rsi_buy', 35)
+        rsi_sell = p.get('rsi_sell', 70)
+        buy_size = p.get('buy_size_pct', 20.0)
+        max_invested = p.get('max_invested_pct', 80.0)
+
+        df['EMA_trend'] = ta.trend.EMAIndicator(df['Close'], window=ema_window).ema_indicator()
+        df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
+        df = df.dropna()
+
+        cash = self.initial_capital
+        lots = []  # Liste de (qty, entry_price) pour chaque achat
+        trades = []
+        portfolio_values = []
+        bought_this_dip = False  # Éviter d'acheter plusieurs fois dans le même creux
+
+        for i in range(1, len(df)):
+            price = df.iloc[i]['Close']
+            prev_rsi = df.iloc[i - 1]['RSI']
+            rsi = df.iloc[i]['RSI']
+            date = df.index[i]
+            ema = df.iloc[i]['EMA_trend']
+
+            total_shares = sum(q for q, _ in lots)
+            portfolio_value = cash + total_shares * price
+            portfolio_values.append({'date': date, 'value': portfolio_value})
+
+            invested_pct = (total_shares * price) / portfolio_value * 100 if portfolio_value > 0 else 0
+
+            # Reset du flag quand le RSI remonte au-dessus du seuil d'achat
+            if rsi > rsi_buy + 10:
+                bought_this_dip = False
+
+            # Achat sur creux RSI dans une tendance haussière
+            if (rsi < rsi_buy and not bought_this_dip
+                    and price > ema and invested_pct < max_invested):
+                invest = portfolio_value * (buy_size / 100.0)
+                invest = min(invest, cash)
+                if invest > price:
+                    qty = invest / price
+                    lots.append((qty, price))
+                    cash -= invest
+                    bought_this_dip = True
+                    trades.append({'date': date, 'symbol': symbol, 'action': 'BUY',
+                                   'price': price, 'qty': qty, 'pnl_pct': 0.0})
+
+            # Vente totale quand RSI > seuil de vente
+            elif rsi > rsi_sell and lots:
+                total_shares = sum(q for q, _ in lots)
+                avg_entry = sum(q * ep for q, ep in lots) / total_shares
+                pnl_pct = ((price - avg_entry) / avg_entry) * 100
+                cash += total_shares * price
+                trades.append({'date': date, 'symbol': symbol, 'action': 'SELL',
+                               'price': price, 'qty': total_shares, 'pnl_pct': pnl_pct})
+                lots = []
+                bought_this_dip = False
+
+            # Sortie de sécurité si tendance casse
+            elif price < ema * 0.97 and lots:
+                total_shares = sum(q for q, _ in lots)
+                avg_entry = sum(q * ep for q, ep in lots) / total_shares
+                pnl_pct = ((price - avg_entry) / avg_entry) * 100
+                cash += total_shares * price
+                trades.append({'date': date, 'symbol': symbol, 'action': 'SELL (EMA)',
+                               'price': price, 'qty': total_shares, 'pnl_pct': pnl_pct})
+                lots = []
+                bought_this_dip = False
+
+        total_shares = sum(q for q, _ in lots)
+        return self._compute_metrics(symbol, df, portfolio_values, trades, cash, total_shares)
+
+    # ── Crossover classique ────────────────────────────────────
+    def _run_crossover(self, symbol, df):
+        """Stratégie EMA crossover classique avec paramètres configurables."""
+        p = self.params
+        ema_fast_w = p.get('ema_fast', 9)
+        ema_slow_w = p.get('ema_slow', 21)
+
+        df['EMA_fast'] = ta.trend.EMAIndicator(df['Close'], window=ema_fast_w).ema_indicator()
+        df['EMA_slow'] = ta.trend.EMAIndicator(df['Close'], window=ema_slow_w).ema_indicator()
+        df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
+        df['Volume_SMA'] = ta.trend.SMAIndicator(df['Volume'], window=20).sma_indicator()
+        df = df.dropna()
+
+        cash = self.initial_capital
+        shares = 0.0
+        entry_price = 0.0
+        highest = 0.0
+        trades = []
+        portfolio_values = []
+
+        for i in range(1, len(df)):
+            current = df.iloc[i]
+            prev = df.iloc[i - 1]
+            price = current['Close']
+            date = df.index[i]
+
+            portfolio_value = cash + shares * price
+            portfolio_values.append({'date': date, 'value': portfolio_value})
+
+            if shares > 0:
+                if price > highest:
+                    highest = price
+                change_pct = ((price - entry_price) / entry_price) * 100
+
+                # Trailing stop
+                if p.get('use_trailing_stop') and p.get('trailing_stop', 0) > 0 and highest > 0:
+                    drop = ((highest - price) / highest) * 100
+                    if drop >= p['trailing_stop']:
+                        cash += shares * price
+                        trades.append({'date': date, 'symbol': symbol, 'action': 'SELL (TS)',
+                                       'price': price, 'qty': shares, 'pnl_pct': change_pct})
+                        shares = 0.0
+                        entry_price = 0.0
+                        highest = 0.0
+                        continue
+
+                # Stop-loss fixe
+                if p.get('stop_loss', 0) > 0 and change_pct <= -p['stop_loss']:
+                    cash += shares * price
+                    trades.append({'date': date, 'symbol': symbol, 'action': 'SELL (SL)',
+                                   'price': price, 'qty': shares, 'pnl_pct': change_pct})
+                    shares = 0.0
+                    entry_price = 0.0
+                    highest = 0.0
+                    continue
+
+                # Take-profit fixe
+                if p.get('take_profit', 0) > 0 and change_pct >= p['take_profit']:
+                    cash += shares * price
+                    trades.append({'date': date, 'symbol': symbol, 'action': 'SELL (TP)',
+                                   'price': price, 'qty': shares, 'pnl_pct': change_pct})
+                    shares = 0.0
+                    entry_price = 0.0
+                    highest = 0.0
+                    continue
+
+            # Signaux
+            ema_cross_up = (prev['EMA_fast'] < prev['EMA_slow']) and (current['EMA_fast'] > current['EMA_slow'])
+            ema_cross_down = (prev['EMA_fast'] > prev['EMA_slow']) and (current['EMA_fast'] < current['EMA_slow'])
+
+            rsi_min = p.get('rsi_buy_min', 40)
+            rsi_max = p.get('rsi_buy_max', 85)
+            buy_signal = ema_cross_up and (rsi_min < current['RSI'] < rsi_max)
+
+            if p.get('use_volume') and buy_signal:
+                buy_signal = current['Volume'] > p.get('volume_mult', 1.5) * current['Volume_SMA']
+
+            if p.get('use_rsi_oversold') and not buy_signal and shares == 0:
+                if current['RSI'] < p.get('rsi_oversold', 35) and current['EMA_fast'] > current['EMA_slow'] * 0.98:
+                    buy_signal = True
+
+            sell_signal = False
+            if p.get('sell_on_ema_cross') and ema_cross_down:
+                sell_signal = True
+            if p.get('sell_on_rsi') and current['RSI'] > p.get('rsi_sell', 78):
+                sell_signal = True
+
+            max_pos = p.get('max_position_pct', 30.0)
+            if buy_signal and shares == 0:
+                allocated = cash * (max_pos / 100.0)
+                qty = allocated / price
+                if qty > 0:
+                    shares = qty
+                    entry_price = price
+                    highest = price
+                    cash -= shares * price
+                    trades.append({'date': date, 'symbol': symbol, 'action': 'BUY',
+                                   'price': price, 'qty': shares, 'pnl_pct': 0.0})
+
+            elif sell_signal and shares > 0:
+                change_pct = ((price - entry_price) / entry_price) * 100
+                cash += shares * price
+                trades.append({'date': date, 'symbol': symbol, 'action': 'SELL',
+                               'price': price, 'qty': shares, 'pnl_pct': change_pct})
+                shares = 0.0
+                entry_price = 0.0
+                highest = 0.0
+
+        return self._compute_metrics(symbol, df, portfolio_values, trades, cash, shares)
