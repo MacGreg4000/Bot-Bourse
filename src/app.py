@@ -47,17 +47,16 @@ def update_data(symbol: str):
 
 def _build_strategy_params(prefix: str, preset_name: str) -> StrategyParams:
     """Construit les paramètres depuis les widgets Streamlit."""
-    preset = STRATEGY_PRESETS[preset_name]
     p = StrategyParams.from_preset(preset_name)
 
     with st.expander(f"Ajuster les paramètres ({prefix})", expanded=False):
+        st.markdown("**Signaux d'achat**")
         col_a, col_b = st.columns(2)
         with col_a:
             p.ema_fast = st.slider("EMA rapide", 3, 20, p.ema_fast, key=f"{prefix}_ema_fast")
             p.ema_slow = st.slider("EMA lente", 10, 50, p.ema_slow, key=f"{prefix}_ema_slow")
-            p.rsi_buy_min = st.slider("RSI achat min", 10, 60, p.rsi_buy_min, key=f"{prefix}_rsi_min")
-            p.rsi_buy_max = st.slider("RSI achat max", 50, 90, p.rsi_buy_max, key=f"{prefix}_rsi_max")
-            p.rsi_sell = st.slider("RSI vente (seuil)", 60, 95, p.rsi_sell, key=f"{prefix}_rsi_sell")
+            p.rsi_buy_min = st.slider("RSI achat min", 10, 80, p.rsi_buy_min, key=f"{prefix}_rsi_min")
+            p.rsi_buy_max = st.slider("RSI achat max", 50, 95, p.rsi_buy_max, key=f"{prefix}_rsi_max")
         with col_b:
             p.use_volume = st.checkbox("Filtre volume", p.use_volume, key=f"{prefix}_use_vol")
             if p.use_volume:
@@ -65,9 +64,30 @@ def _build_strategy_params(prefix: str, preset_name: str) -> StrategyParams:
             p.use_rsi_oversold = st.checkbox("Achat RSI oversold", p.use_rsi_oversold, key=f"{prefix}_use_os")
             if p.use_rsi_oversold:
                 p.rsi_oversold = st.slider("Seuil RSI oversold", 15, 40, p.rsi_oversold, key=f"{prefix}_os")
-            p.stop_loss = st.slider("Stop-loss %", 1.0, 15.0, p.stop_loss, 0.5, key=f"{prefix}_sl")
-            p.take_profit = st.slider("Take-profit %", 3.0, 30.0, p.take_profit, 0.5, key=f"{prefix}_tp")
-            p.max_position_pct = st.slider("Taille position %", 5.0, 50.0, p.max_position_pct, 5.0, key=f"{prefix}_pos")
+
+        st.markdown("**Signaux de vente**")
+        col_c, col_d = st.columns(2)
+        with col_c:
+            p.sell_on_ema_cross = st.checkbox("Vendre sur croisement EMA baissier", p.sell_on_ema_cross, key=f"{prefix}_sell_ema")
+            p.sell_on_rsi = st.checkbox("Vendre sur RSI élevé", p.sell_on_rsi, key=f"{prefix}_sell_rsi")
+            if p.sell_on_rsi:
+                p.rsi_sell = st.slider("RSI vente (seuil)", 60, 95, p.rsi_sell, key=f"{prefix}_rsi_sell")
+        with col_d:
+            p.use_trailing_stop = st.checkbox("Trailing stop (recommandé)", p.use_trailing_stop, key=f"{prefix}_use_ts")
+            if p.use_trailing_stop:
+                p.trailing_stop = st.slider("Trailing stop %", 3.0, 20.0, p.trailing_stop, 0.5, key=f"{prefix}_ts",
+                                            help="Vend si le prix chute de X% depuis son plus haut")
+
+        st.markdown("**Gestion du risque**")
+        col_e, col_f = st.columns(2)
+        with col_e:
+            p.stop_loss = st.slider("Stop-loss fixe %", 0.0, 15.0, p.stop_loss, 0.5, key=f"{prefix}_sl",
+                                    help="0 = désactivé")
+            p.take_profit = st.slider("Take-profit fixe %", 0.0, 50.0, p.take_profit, 1.0, key=f"{prefix}_tp",
+                                      help="0 = désactivé (recommandé avec trailing stop)")
+        with col_f:
+            p.max_position_pct = st.slider("Taille position %", 5.0, 100.0, p.max_position_pct, 5.0, key=f"{prefix}_pos",
+                                           help="% du capital par trade")
     return p
 
 

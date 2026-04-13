@@ -13,41 +13,53 @@ logger = logging.getLogger(__name__)
 
 # Presets de stratégie
 STRATEGY_PRESETS = {
-    'Conservatrice (actuelle)': {
-        'description': 'EMA crossover strict + RSI 50-75 + volume 1.5x — peu de trades, très sélectif',
+    'Trend Following': {
+        'description': 'Suit la tendance avec trailing stop — laisse courir les gains, coupe les pertes vite',
         'ema_fast': 9, 'ema_slow': 21,
-        'rsi_buy_min': 50, 'rsi_buy_max': 75,
-        'rsi_sell': 78,
-        'volume_mult': 1.5,
-        'use_volume': True,
-        'use_rsi_oversold': False, 'rsi_oversold': 30,
-        'stop_loss': 5.0, 'take_profit': 10.0,
-        'max_position_pct': 10.0,
+        'rsi_buy_min': 40, 'rsi_buy_max': 85,
+        'rsi_sell': 95,
+        'volume_mult': 1.0,
+        'use_volume': False,
+        'use_rsi_oversold': True, 'rsi_oversold': 35,
+        'stop_loss': 5.0, 'take_profit': 0.0,
+        'trailing_stop': 8.0,
+        'use_trailing_stop': True,
+        'sell_on_ema_cross': True,
+        'sell_on_rsi': False,
+        'max_position_pct': 30.0,
     },
     'Agressive': {
-        'description': 'EMA rapide + RSI large + pas de filtre volume — beaucoup plus de trades',
+        'description': 'EMA rapide + RSI large + trailing stop — réactif sur valeurs volatiles',
         'ema_fast': 5, 'ema_slow': 13,
         'rsi_buy_min': 35, 'rsi_buy_max': 70,
         'rsi_sell': 72,
         'volume_mult': 1.0,
         'use_volume': False,
         'use_rsi_oversold': True, 'rsi_oversold': 25,
-        'stop_loss': 3.0, 'take_profit': 8.0,
-        'max_position_pct': 20.0,
+        'stop_loss': 4.0, 'take_profit': 0.0,
+        'trailing_stop': 6.0,
+        'use_trailing_stop': True,
+        'sell_on_ema_cross': True,
+        'sell_on_rsi': False,
+        'max_position_pct': 25.0,
     },
     'Momentum': {
-        'description': 'Suit la tendance forte — RSI élevé = force, pas de filtre volume',
+        'description': 'Achète la force (RSI élevé), trailing stop large pour laisser la tendance respirer',
         'ema_fast': 9, 'ema_slow': 21,
         'rsi_buy_min': 55, 'rsi_buy_max': 80,
-        'rsi_sell': 85,
+        'rsi_sell': 95,
         'volume_mult': 1.0,
         'use_volume': False,
         'use_rsi_oversold': False, 'rsi_oversold': 30,
-        'stop_loss': 7.0, 'take_profit': 15.0,
-        'max_position_pct': 15.0,
+        'stop_loss': 6.0, 'take_profit': 0.0,
+        'trailing_stop': 10.0,
+        'use_trailing_stop': True,
+        'sell_on_ema_cross': True,
+        'sell_on_rsi': False,
+        'max_position_pct': 25.0,
     },
     'Mean Reversion': {
-        'description': 'Achète les baisses (RSI oversold) et vend les rebonds',
+        'description': 'Achète les creux (RSI oversold), vend les rebonds rapidement',
         'ema_fast': 9, 'ema_slow': 21,
         'rsi_buy_min': 20, 'rsi_buy_max': 40,
         'rsi_sell': 65,
@@ -55,7 +67,26 @@ STRATEGY_PRESETS = {
         'use_volume': False,
         'use_rsi_oversold': True, 'rsi_oversold': 30,
         'stop_loss': 4.0, 'take_profit': 8.0,
-        'max_position_pct': 15.0,
+        'trailing_stop': 0.0,
+        'use_trailing_stop': False,
+        'sell_on_ema_cross': False,
+        'sell_on_rsi': True,
+        'max_position_pct': 20.0,
+    },
+    'Conservatrice (ancienne)': {
+        'description': 'Stratégie originale — EMA crossover strict + RSI 50-75 + volume 1.5x',
+        'ema_fast': 9, 'ema_slow': 21,
+        'rsi_buy_min': 50, 'rsi_buy_max': 75,
+        'rsi_sell': 78,
+        'volume_mult': 1.5,
+        'use_volume': True,
+        'use_rsi_oversold': False, 'rsi_oversold': 30,
+        'stop_loss': 5.0, 'take_profit': 10.0,
+        'trailing_stop': 0.0,
+        'use_trailing_stop': False,
+        'sell_on_ema_cross': True,
+        'sell_on_rsi': True,
+        'max_position_pct': 10.0,
     },
 }
 
@@ -67,6 +98,8 @@ class StrategyParams:
                  volume_mult=1.5, use_volume=True,
                  use_rsi_oversold=False, rsi_oversold=30,
                  stop_loss=5.0, take_profit=10.0,
+                 trailing_stop=0.0, use_trailing_stop=False,
+                 sell_on_ema_cross=True, sell_on_rsi=True,
                  max_position_pct=10.0):
         self.ema_fast = ema_fast
         self.ema_slow = ema_slow
@@ -79,6 +112,10 @@ class StrategyParams:
         self.rsi_oversold = rsi_oversold
         self.stop_loss = stop_loss
         self.take_profit = take_profit
+        self.trailing_stop = trailing_stop
+        self.use_trailing_stop = use_trailing_stop
+        self.sell_on_ema_cross = sell_on_ema_cross
+        self.sell_on_rsi = sell_on_rsi
         self.max_position_pct = max_position_pct
 
     @classmethod
@@ -146,6 +183,7 @@ class BacktestEngine:
         cash = self.initial_capital
         shares = 0.0
         entry_price = 0.0
+        highest_since_entry = 0.0  # Pour le trailing stop
         trades = []
         portfolio_values = []
 
@@ -158,10 +196,30 @@ class BacktestEngine:
             portfolio_value = cash + shares * price
             portfolio_values.append({'date': date, 'value': portfolio_value})
 
-            # Stop-loss / take-profit
+            # Gestion de position ouverte
             if shares > 0:
                 change_pct = ((price - entry_price) / entry_price) * 100
-                if change_pct <= -p.stop_loss:
+
+                # Mettre à jour le plus haut depuis l'entrée
+                if price > highest_since_entry:
+                    highest_since_entry = price
+
+                # Trailing stop : vente si le prix chute de X% depuis le plus haut
+                if p.use_trailing_stop and p.trailing_stop > 0 and highest_since_entry > 0:
+                    drop_from_high = ((highest_since_entry - price) / highest_since_entry) * 100
+                    if drop_from_high >= p.trailing_stop:
+                        cash += shares * price
+                        trades.append({
+                            'date': date, 'symbol': symbol, 'action': 'SELL (TS)',
+                            'price': price, 'qty': shares, 'pnl_pct': change_pct
+                        })
+                        shares = 0.0
+                        entry_price = 0.0
+                        highest_since_entry = 0.0
+                        continue
+
+                # Stop-loss fixe
+                if p.stop_loss > 0 and change_pct <= -p.stop_loss:
                     cash += shares * price
                     trades.append({
                         'date': date, 'symbol': symbol, 'action': 'SELL (SL)',
@@ -169,8 +227,11 @@ class BacktestEngine:
                     })
                     shares = 0.0
                     entry_price = 0.0
+                    highest_since_entry = 0.0
                     continue
-                elif change_pct >= p.take_profit:
+
+                # Take-profit fixe (0 = désactivé)
+                if p.take_profit > 0 and change_pct >= p.take_profit:
                     cash += shares * price
                     trades.append({
                         'date': date, 'symbol': symbol, 'action': 'SELL (TP)',
@@ -178,26 +239,30 @@ class BacktestEngine:
                     })
                     shares = 0.0
                     entry_price = 0.0
+                    highest_since_entry = 0.0
                     continue
 
-            # Signaux avec paramètres configurables
+            # Signaux d'achat
             ema_cross_up = (prev['EMA_fast'] < prev['EMA_slow']) and (current['EMA_fast'] > current['EMA_slow'])
             ema_cross_down = (prev['EMA_fast'] > prev['EMA_slow']) and (current['EMA_fast'] < current['EMA_slow'])
 
-            # Signal d'achat : EMA crossover + RSI dans la zone configurée
             buy_signal = ema_cross_up and (p.rsi_buy_min < current['RSI'] < p.rsi_buy_max)
 
             # Filtre volume optionnel
             if p.use_volume and buy_signal:
                 buy_signal = current['Volume'] > p.volume_mult * current['Volume_SMA']
 
-            # Signal alternatif : RSI oversold (achat sur les creux)
+            # Signal alternatif : RSI oversold
             if p.use_rsi_oversold and not buy_signal and shares == 0:
                 if current['RSI'] < p.rsi_oversold and current['EMA_fast'] > current['EMA_slow'] * 0.98:
                     buy_signal = True
 
-            # Signal de vente
-            sell_signal = ema_cross_down or (current['RSI'] > p.rsi_sell)
+            # Signaux de vente (configurables)
+            sell_signal = False
+            if p.sell_on_ema_cross and ema_cross_down:
+                sell_signal = True
+            if p.sell_on_rsi and current['RSI'] > p.rsi_sell:
+                sell_signal = True
 
             # Exécution
             if buy_signal and shares == 0:
@@ -206,6 +271,7 @@ class BacktestEngine:
                 if qty > 0:
                     shares = qty
                     entry_price = price
+                    highest_since_entry = price
                     cash -= shares * price
                     trades.append({
                         'date': date, 'symbol': symbol, 'action': 'BUY',
@@ -221,6 +287,7 @@ class BacktestEngine:
                 })
                 shares = 0.0
                 entry_price = 0.0
+                highest_since_entry = 0.0
 
         # Valeur finale
         final_price = df.iloc[-1]['Close']
