@@ -5,6 +5,7 @@ from plotly.subplots import make_subplots
 from config import Config
 from engine import TradingEngine
 from strategy import TradingStrategy
+from backtest import BacktestEngine
 from alpaca.trading.client import TradingClient
 from alpaca.data import StockHistoricalDataClient
 import logging
@@ -44,6 +45,130 @@ def update_data(symbol: str):
         logger.error(f"Failed to update data for {symbol}", exc_info=True)
 
 
+def render_backtest_tab():
+    """Onglet de backtesting historique."""
+    st.header("📊 Backtest — Performance Historique")
+    st.markdown("Testez la stratégie sur des données passées pour évaluer sa performance.")
+
+    BACKTEST_SYMBOLS = ['AAPL', 'SPY', 'QQQ', 'TSLA', 'NVDA', 'MSFT', 'AMD', 'COIN', 'PLTR', 'MARA']
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        symbols = st.multiselect("Symboles", BACKTEST_SYMBOLS, default=['TSLA', 'NVDA', 'SPY'])
+    with col2:
+        days = st.selectbox("Période", [90, 180, 365, 730], index=2,
+                            format_func=lambda d: f"{d} jours ({d // 30} mois)")
+    with col3:
+        capital = st.number_input("Capital initial ($)", value=100_000, step=10_000, min_value=1_000)
+
+    if st.button("🚀 Lancer le Backtest", type="primary"):
+        if not symbols:
+            st.warning("Sélectionnez au moins un symbole.")
+            return
+
+        data_client = StockHistoricalDataClient(Config.ALPACA_API_KEY, Config.ALPACA_SECRET_KEY)
+        engine = BacktestEngine(data_client, initial_capital=float(capital))
+
+        results = []
+        progress = st.progress(0)
+        for i, sym in enumerate(symbols):
+            with st.spinner(f"Backtest {sym}..."):
+                result = engine.run(sym, days=days)
+                results.append(result)
+            progress.progress((i + 1) / len(symbols))
+        progress.empty()
+
+        # Tableau récapitulatif
+        st.subheader("📋 Résultats")
+        summary_rows = []
+        for r in results:
+            if 'error' in r:
+                st.warning(r['error'])
+                continue
+            summary_rows.append({
+                'Symbole': r['symbol'],
+                'Rendement Stratégie': f"{r['total_return_pct']:+.2f}%",
+                'Rendement Buy & Hold': f"{r['buy_hold_return_pct']:+.2f}%",
+                'Surperformance': f"{r['total_return_pct'] - r['buy_hold_return_pct']:+.2f}%",
+                'Max Drawdown': f"{r['max_drawdown_pct']:.2f}%",
+                'Nb Trades': r['nb_trades'],
+                'Win Rate': f"{r['win_rate']:.0f}%",
+                'Gain Moyen': f"{r['avg_win_pct']:+.2f}%",
+                'Perte Moyenne': f"{r['avg_loss_pct']:+.2f}%",
+                'Valeur Finale': f"${r['final_value']:,.2f}",
+            })
+
+        if summary_rows:
+            st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+        # Graphiques détaillés par symbole
+        for r in results:
+            if 'error' in r:
+                continue
+
+            st.markdown("---")
+            st.subheader(f"📈 {r['symbol']}")
+
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            col_m1.metric("Rendement", f"{r['total_return_pct']:+.2f}%")
+            col_m2.metric("Buy & Hold", f"{r['buy_hold_return_pct']:+.2f}%")
+            col_m3.metric("Max Drawdown", f"{r['max_drawdown_pct']:.2f}%")
+            col_m4.metric("Win Rate", f"{r['win_rate']:.0f}% ({r['nb_trades']} trades)")
+
+            # Graphique évolution du portefeuille
+            portfolio_df = r['portfolio']
+            df = r['df']
+            trades_df = r['trades']
+
+            if not portfolio_df.empty:
+                fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                    subplot_titles=('Prix & Trades', 'Valeur du Portefeuille'),
+                                    row_heights=[0.5, 0.5])
+
+                # Prix avec marqueurs d'achat/vente
+                fig.add_trace(go.Scatter(
+                    x=df.index, y=df['Close'], name="Prix",
+                    line=dict(color='gray', width=1)
+                ), row=1, col=1)
+
+                if not trades_df.empty:
+                    buys = trades_df[trades_df['action'] == 'BUY']
+                    sells = trades_df[trades_df['action'].str.startswith('SELL')]
+                    fig.add_trace(go.Scatter(
+                        x=buys['date'], y=buys['price'], mode='markers',
+                        name='Achat', marker=dict(color='green', size=10, symbol='triangle-up')
+                    ), row=1, col=1)
+                    fig.add_trace(go.Scatter(
+                        x=sells['date'], y=sells['price'], mode='markers',
+                        name='Vente', marker=dict(color='red', size=10, symbol='triangle-down')
+                    ), row=1, col=1)
+
+                # Courbe du portefeuille
+                fig.add_trace(go.Scatter(
+                    x=portfolio_df['date'], y=portfolio_df['value'],
+                    name="Portefeuille", line=dict(color='blue', width=2),
+                    fill='tozeroy', fillcolor='rgba(0,100,255,0.1)'
+                ), row=2, col=1)
+
+                # Ligne du capital initial
+                fig.add_hline(y=float(capital), line_dash="dash", line_color="gray",
+                              annotation_text="Capital initial", row=2, col=1)
+
+                fig.update_layout(height=600, showlegend=True)
+                st.plotly_chart(fig, use_container_width=True)
+
+            # Détail des trades
+            if not trades_df.empty:
+                with st.expander(f"Détail des {len(trades_df)} trades"):
+                    display_df = trades_df.copy()
+                    display_df['date'] = display_df['date'].dt.strftime('%Y-%m-%d')
+                    display_df['price'] = display_df['price'].map('${:,.2f}'.format)
+                    display_df['qty'] = display_df['qty'].map('{:.2f}'.format)
+                    display_df['pnl_pct'] = display_df['pnl_pct'].map('{:+.2f}%'.format)
+                    display_df.columns = ['Date', 'Symbole', 'Action', 'Prix', 'Quantité', 'P&L']
+                    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+
 def main():
     try:
         Config.validate()
@@ -53,8 +178,18 @@ def main():
 
     st.set_page_config(page_title="Bot Trading Alpaca", page_icon="📈", layout="wide")
     st.title("🤖 Bot de Trading Algorithmique - Alpaca")
-    st.markdown("**Interface de visualisation et contrôle**")
 
+    tab_trading, tab_backtest = st.tabs(["📈 Trading", "📊 Backtest"])
+
+    with tab_backtest:
+        render_backtest_tab()
+
+    with tab_trading:
+        render_trading_tab()
+
+
+def render_trading_tab():
+    """Onglet principal de trading en temps réel."""
     with st.sidebar:
         st.header("⚙️ Contrôles")
 
